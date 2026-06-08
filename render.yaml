@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: verhuisvlot-webhook
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn monday_webhook_sync:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
