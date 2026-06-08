@@ -245,13 +245,40 @@ def create_or_update_item(webhook_data):
         }
 
 
-@app.route('/webhook', methods=['POST'])
+@app.route('/webhook', methods=['POST', 'GET'])
 def webhook_handler():
     """Webhook endpoint die Monday.com data ontvangt"""
     
     try:
+        # Handle Monday.com challenge verification
+        if request.method == 'GET':
+            challenge = request.args.get('challenge')
+            if challenge:
+                return jsonify({"challenge": challenge}), 200
+        
         # Parse webhook data
         webhook_data = request.json
+        
+        # Handle Monday.com challenge in POST body
+        if 'challenge' in webhook_data:
+            return jsonify({"challenge": webhook_data['challenge']}), 200
+        
+        print(f"Received webhook: {json.dumps(webhook_data, indent=2)}")
+        
+        # Verwerk de data
+        result = create_or_update_item(webhook_data)
+        
+        return jsonify({
+            "success": True,
+            "result": result
+        }), 200
+    
+    except Exception as e:
+        print(f"Error processing webhook: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
         
         print(f"Received webhook: {json.dumps(webhook_data, indent=2)}")
         
