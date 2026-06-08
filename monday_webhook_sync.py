@@ -150,161 +150,262 @@ def format_column_value(column_type, value):
 def create_or_update_item(webhook_data):
     """Creëer of update een item in het doel-board"""
     
-    # Extract data uit webhook
-    item_name = webhook_data.get("name", "Unnamed Lead")
-    email = webhook_data.get("email")
-    phone = webhook_data.get("phone")
-    
-    # Zoek bestaand item
-    existing_item_id = find_existing_item(email, phone)
-    
-    # Bouw column values
-    column_values = {}
-    for source_col, target_col in COLUMN_MAPPING.items():
-        if source_col in webhook_data and webhook_data[source_col]:
-            # Bepaal kolom type op basis van target kolom ID
-            if "color_" in target_col:
-                col_type = "status"
-            elif "phone_" in target_col:
-                col_type = "phone"
-            elif "email_" in target_col:
-                col_type = "email"
-            elif "date_" in target_col:
-                col_type = "date"
-            elif "long_text_" in target_col:
-                col_type = "long_text"
-            else:
-                col_type = "text"
-            
-            formatted_value = format_column_value(col_type, webhook_data[source_col])
-            if formatted_value:
-                column_values[target_col] = formatted_value
-    
-    column_values_json = json.dumps(column_values)
-    
-    if existing_item_id:
-        # Update bestaand item
-        print(f"Updating existing item: {existing_item_id}")
+    # Check if this is a Monday.com event webhook
+    if 'event' in webhook_data:
+        event = webhook_data['event']
         
-        mutation = """
-        mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
-            change_multiple_column_values(
-                board_id: $boardId
-                item_id: $itemId
-                column_values: $columnValues
-            ) {
+        # Extract basic info
+        item_name = event.get('pulseName', 'Unnamed Lead')
+        pulse_id = event.get('pulseId')
+        
+        # We need to fetch the full item data from Monday.com
+        # because the webhook only sends the changed column
+        query = """
+        query ($itemId: ID!) {
+            items(ids: [$itemId]) {
                 id
                 name
+                column_values {
+                    id
+                    text
+                    value
+                }
             }
         }
         """
         
-        variables = {
-            "boardId": TARGET_BOARD_ID,
-            "itemId": existing_item_id,
-            "columnValues": column_values_json
-        }
+        variables = {"itemId": str(pulse_id)}
         
-        result = monday_api_call(mutation, variables)
-        return {
-            "action": "updated",
-            "item_id": existing_item_id,
-            "item_name": item_name
-        }
+        try:
+            result = monday_api_call(query, variables)
+            items = result.get("data", {}).get("items", [])
+            
+            if not items:
+                print(f"Item {pulse_id} not found")
+                return {"action": "skipped", "reason": "item not found"}
+            
+            item = items[0]
+            item_name = item.get("name", "Unnamed Lead")
+            
+            # Extract column values
+            email = None
+            phone = None
+            column_data = {}
+            
+            for col in item.get("column_values", []):
+                col_id = col.get("id")
+                col_text = col.get("text")
+                col_value = col.get("value")
+                
+                # Map to our target columns
+                if "email" in col_id.lower() or "e-mail" in col_id.lower():
+                    email = col_text
+                    column_data["email"] = col_text
+                elif "phone" in col_id.lower() or "telefoon" in col_id.lower():
+                    phone = col_text
+                    column_data["phone"] = col_text
+                elif "status" in col_id.lower():
+                    if col_value:
+                        try:
+                            value_json = json.loads(col_value)
+                            if "label" in value_json:
+                                column_data["status"] = value_json["label"].get("text", col_text)
+                            else:
+                                column_data["status"] = col_text
+                        except:
+                            column_data["status"] = col_text
+                elif col_text:  # Only add if there's actual text
+                    # Store other columns by their ID
+                    column_data[col_id] = col_text
+            
+            # Find existing item by email or phone
+            existing_item_id = find_existing_item(email, phone)
+            
+            # Build column values for target board
+            column_values = {}
+            
+            # Map the data to target columns
+            if item_name:
+                pass  # Name is set separately
+            
+            if column_data.get("status"):
+                column_values["color_mm447yqp"] = json.dumps({"label": column_data["status"]})
+            
+            if column_data.get("phone"):
+                column_values["phone_mm4437rj"] = json.dumps({"phone": column_data["phone"], "countryShortName": "NL"})
+            
+            if column_data.get("email"):
+                column_values["email_mm44bcht"] = json.dumps({"email": column_data["email"], "text": column_data["email"]})
+            
+            # Add other text columns if they exist
+            for col_id, value in column_data.items():
+                if col_id not in ["email", "phone", "status"] and value:
+                    # Try to map to target columns
+                    if "ontruimen" in col_id.lower():
+                        column_values["text_mm44f127"] = value
+                    elif "termijn" in col_id.lower():
+                        column_values["text_mm44qvrx"] = value
+                    elif "plaats" in col_id.lower():
+                        column_values["text_mm4485z4"] = value
+                    elif "tekst" in col_id.lower():
+                        column_values["long_text_mm445fwr"] = json.dumps({"text": value})
+                    elif "opvolging" in col_id.lower():
+                        column_values["text_mm446bsd"] = value
+            
+            column_values_json = json.dumps(column_values)
+            
+            if existing_item_id:
+                # Update existing item
+                print(f"Updating existing item: {existing_item_id} - {item_name}")
+                
+                mutation = """
+                mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
+                    change_multiple_column_values(
+                        board_id: $boardId
+                        item_id: $itemId
+                        column_values: $columnValues
+                    ) {
+                        id
+                        name
+                    }
+                }
+                """
+                
+                variables = {
+                    "boardId": TARGET_BOARD_ID,
+                    "itemId": existing_item_id,
+                    "columnValues": column_values_json
+                }
+                
+                result = monday_api_call(mutation, variables)
+                return {
+                    "action": "updated",
+                    "item_id": existing_item_id,
+                    "item_name": item_name
+                }
+            
+            else:
+                # Create new item
+                print(f"Creating new item: {item_name}")
+                
+                mutation = """
+                mutation ($boardId: ID!, $itemName: String!, $columnValues: JSON!) {
+                    create_item(
+                        board_id: $boardId
+                        item_name: $itemName
+                        column_values: $columnValues
+                    ) {
+                        id
+                        name
+                    }
+                }
+                """
+                
+                variables = {
+                    "boardId": TARGET_BOARD_ID,
+                    "itemName": item_name,
+                    "columnValues": column_values_json
+                }
+                
+                result = monday_api_call(mutation, variables)
+                new_item = result.get("data", {}).get("create_item", {})
+                
+                return {
+                    "action": "created",
+                    "item_id": new_item.get("id"),
+                    "item_name": item_name
+                }
+                
+        except Exception as e:
+            print(f"Error fetching item data: {e}")
+            return {"action": "error", "error": str(e)}
     
     else:
-        # Creëer nieuw item
-        print(f"Creating new item: {item_name}")
+        # Old format (direct column mapping)
+        item_name = webhook_data.get("name", "Unnamed Lead")
+        email = webhook_data.get("email")
+        phone = webhook_data.get("phone")
         
-        mutation = """
-        mutation ($boardId: ID!, $itemName: String!, $columnValues: JSON!) {
-            create_item(
-                board_id: $boardId
-                item_name: $itemName
-                column_values: $columnValues
-            ) {
-                id
-                name
+        existing_item_id = find_existing_item(email, phone)
+        
+        column_values = {}
+        for source_col, target_col in COLUMN_MAPPING.items():
+            if source_col in webhook_data and webhook_data[source_col]:
+                if "color_" in target_col:
+                    col_type = "status"
+                elif "phone_" in target_col:
+                    col_type = "phone"
+                elif "email_" in target_col:
+                    col_type = "email"
+                elif "date_" in target_col:
+                    col_type = "date"
+                elif "long_text_" in target_col:
+                    col_type = "long_text"
+                else:
+                    col_type = "text"
+                
+                formatted_value = format_column_value(col_type, webhook_data[source_col])
+                if formatted_value:
+                    column_values[target_col] = formatted_value
+        
+        column_values_json = json.dumps(column_values)
+        
+        if existing_item_id:
+            print(f"Updating existing item: {existing_item_id}")
+            
+            mutation = """
+            mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
+                change_multiple_column_values(
+                    board_id: $boardId
+                    item_id: $itemId
+                    column_values: $columnValues
+                ) {
+                    id
+                    name
+                }
             }
-        }
-        """
+            """
+            
+            variables = {
+                "boardId": TARGET_BOARD_ID,
+                "itemId": existing_item_id,
+                "columnValues": column_values_json
+            }
+            
+            result = monday_api_call(mutation, variables)
+            return {
+                "action": "updated",
+                "item_id": existing_item_id,
+                "item_name": item_name
+            }
         
-        variables = {
-            "boardId": TARGET_BOARD_ID,
-            "itemName": item_name,
-            "columnValues": column_values_json
-        }
-        
-        result = monday_api_call(mutation, variables)
-        new_item = result.get("data", {}).get("create_item", {})
-        
-        return {
-            "action": "created",
-            "item_id": new_item.get("id"),
-            "item_name": item_name
-        }
-
-
-@app.route('/webhook', methods=['POST', 'GET'])
-def webhook_handler():
-    """Webhook endpoint die Monday.com data ontvangt"""
-    
-    try:
-        # Handle Monday.com challenge verification
-        if request.method == 'GET':
-            challenge = request.args.get('challenge')
-            if challenge:
-                return jsonify({"challenge": challenge}), 200
-        
-        # Parse webhook data
-        webhook_data = request.json
-        
-        # Handle Monday.com challenge in POST body
-        if 'challenge' in webhook_data:
-            return jsonify({"challenge": webhook_data['challenge']}), 200
-        
-        print(f"Received webhook: {json.dumps(webhook_data, indent=2)}")
-        
-        # Verwerk de data
-        result = create_or_update_item(webhook_data)
-        
-        return jsonify({
-            "success": True,
-            "result": result
-        }), 200
-    
-    except Exception as e:
-        print(f"Error processing webhook: {e}")
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-        
-        print(f"Received webhook: {json.dumps(webhook_data, indent=2)}")
-        
-        # Verwerk de data
-        result = create_or_update_item(webhook_data)
-        
-        return jsonify({
-            "success": True,
-            "result": result
-        }), 200
-    
-    except Exception as e:
-        print(f"Error processing webhook: {e}")
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({"status": "healthy"}), 200
-
-
-if __name__ == '__main__':
-    # Start de Flask server
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+        else:
+            print(f"Creating new item: {item_name}")
+            
+            mutation = """
+            mutation ($boardId: ID!, $itemName: String!, $columnValues: JSON!) {
+                create_item(
+                    board_id: $boardId
+                    item_name: $itemName
+                    column_values: $columnValues
+                ) {
+                    id
+                    name
+                }
+            }
+            """
+            
+            variables = {
+                "boardId": TARGET_BOARD_ID,
+                "itemName": item_name,
+                "columnValues": column_values_json
+            }
+            
+            result = monday_api_call(mutation, variables)
+            new_item = result.get("data", {}).get("create_item", {})
+            
+            return {
+                "action": "created",
+                "item_id": new_item.get("id"),
+                "item_name": item_name
+            }
