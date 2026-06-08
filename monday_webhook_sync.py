@@ -409,3 +409,66 @@ def create_or_update_item(webhook_data):
                 "item_id": new_item.get("id"),
                 "item_name": item_name
             }
+
+@app.route('/webhook', methods=['POST', 'GET'])
+def webhook_handler():
+    """Webhook endpoint die Monday.com data ontvangt"""
+    
+    try:
+        # Handle Monday.com challenge verification
+        if request.method == 'GET':
+            challenge = request.args.get('challenge')
+            if challenge:
+                return jsonify({"challenge": challenge}), 200
+        
+        # Parse webhook data
+        webhook_data = request.json
+        
+        # Handle Monday.com challenge in POST body
+        if 'challenge' in webhook_data:
+            return jsonify({"challenge": webhook_data['challenge']}), 200
+        
+        print(f"Received webhook: {json.dumps(webhook_data, indent=2)}")
+        
+        # Verwerk de data
+        result = create_or_update_item(webhook_data)
+        
+        print(f"Result: {json.dumps(result, indent=2)}")
+        
+        return jsonify({
+            "success": True,
+            "result": result
+        }), 200
+    
+    except Exception as e:
+        print(f"Error processing webhook: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({"status": "healthy"}), 200
+
+
+@app.route('/', methods=['GET'])
+def home():
+    """Home endpoint"""
+    return jsonify({
+        "status": "running",
+        "endpoints": {
+            "webhook": "/webhook",
+            "health": "/health"
+        }
+    }), 200
+
+
+if __name__ == '__main__':
+    # Start de Flask server
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
